@@ -1,0 +1,56 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ---- 虚拟环境 / 依赖 ----
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+
+# ---- 测试与覆盖率 ----
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# ---- 工具缓存 ----
+.mypy_cache/
+.ruff_cache/
+.cache/
+
+# ---- 运行时产物 ----
+/logs/
+/data/
+/docs/
+/config.py
+/pytest-of-*/
+*.log
+*.err
+
+# ---- 前端 ----
+web/node_modules/
+web/dist/
+web/.vite/
+.npm-cache/
+.edge-profile/
+.edge-headless/
+page.png
+src/rag_service/static/*
+!src/rag_service/static/.gitkeep
+
+# ---- IDE / 系统 ----
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
