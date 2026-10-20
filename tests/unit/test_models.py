@@ -9,7 +9,7 @@ from rag_service.infra.db import (
     database_name_from_url,
     server_url_without_database,
 )
-from rag_service.models.tables import ChatMessage, ChatSession, KbChunk, KbDocument
+from rag_service.models.tables import ChatMessage, ChatSession, FaqPair, KbChunk, KbDocument
 
 
 def test_create_all_and_insert_document_with_chunk():
@@ -42,6 +42,17 @@ def test_create_all_creates_chat_tables():
         s.add(ChatMessage(id="m1", session_id="s1", role="user", content="你好"))
         s.commit()
         assert s.query(ChatMessage).filter_by(session_id="s1").one().content == "你好"
+
+
+def test_faq_pair_defaults_enabled_and_zero_hits():
+    engine = build_engine("sqlite://")
+    create_all(engine)
+    factory = build_session_factory(engine)
+    with factory() as s:
+        s.add(FaqPair(id="f1", question="多久发货", answer="48 小时"))
+        s.commit()
+        row = s.get(FaqPair, "f1")
+        assert row.enabled is True and row.hit_count == 0 and row.last_hit_at is None
 
 
 def test_database_url_helpers_extract_name_and_server_url():

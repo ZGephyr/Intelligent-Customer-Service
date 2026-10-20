@@ -6,14 +6,14 @@ import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine, URL, make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from rag_service.core.exceptions import AppError, ErrorCode
 from rag_service.core.logging import get_logger
-from rag_service.models.tables import Base
+from rag_service.models.tables import Base, ChatMessage, ChatSession
 
 logger = get_logger(__name__)
 
@@ -49,6 +49,32 @@ def session_scope(factory: sessionmaker[Session]) -> Iterator[Session]:
 
 def create_all(engine: Engine) -> None:
     Base.metadata.create_all(engine)
+
+
+MIGRATED_TABLES = (ChatMessage, ChatSession)
+
+
+def ensure_schema(engine: Engine) -> None:
+    """建表 + 给老库补新列；幂等，重复启动不报错。"""
+    create_all(engine)
+
+    inspector = inspect(engine)
+    for model in MIGRATED_TABLES:
+        table_name = model.__tablename__
+        existing = {column["name"] for column in inspector.get_columns(table_name)}
+        missing = [column for column in model.__table__.columns if column.name not in existing]
+        if not missing:
+            continue
+        with engine.begin() as conn:
+            for column in missing:
+                column_type = column.type.compile(engine.dialect)
+                try:
+                    conn.execute(
+                        text(f"ALTER TABLE {table_name} ADD COLUMN {column.name} {column_type}")
+                    )
+                    logger.info("迁移补齐列: %s.%s", table_name, column.name)
+                except Exception:  # noqa: BLE001 - 多 worker 并发补列时可能已存在
+                    logger.warning("补列失败（可能已由其他进程补齐）: %s.%s", table_name, column.name)
 
 
 def database_name_from_url(database_url: str) -> str:

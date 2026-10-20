@@ -61,6 +61,13 @@ class HistoryStore:
         except Exception:  # noqa: BLE001 - 缓存故障必须降级
             logger.warning("写入 Redis 历史失败: session=%s", session_id)
 
+    def clear(self, session_id: str) -> None:
+        """删除会话时清掉缓存；故障只记 warning，不影响删除结果。"""
+        try:
+            self._client.delete(self._key(session_id))
+        except Exception:  # noqa: BLE001 - 缓存清理失败可忽略
+            logger.warning("清理 Redis 历史失败: session=%s", session_id)
+
     def ping(self) -> bool:
         try:
             return bool(self._client.ping())

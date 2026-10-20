@@ -1,21 +1,21 @@
-import { onBeforeUnmount, reactive, ref } from "vue";
+import { reactive, ref } from "vue";
 
-const STORAGE_KEY = "rag_session_id";
+const STORAGE_PREFIX = "zhidian_messages_";
 
-export function useChatSocket() {
+export function useChatSocket(getSessionId) {
   const messages = ref([]);
   const status = ref("idle");
   const errorText = ref("");
-  const sessionId = ref(localStorage.getItem(STORAGE_KEY) || "");
 
   let socket = null;
   let currentAssistant = null;
   let retries = 0;
-  let manualClose = false;
+  let manual = false;
 
   function buildUrl() {
     const protocol = location.protocol === "https:" ? "wss" : "ws";
-    const query = sessionId.value ? `?session_id=${encodeURIComponent(sessionId.value)}` : "";
+    const sessionId = getSessionId();
+    const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
     return `${protocol}://${location.host}/ws/chat${query}`;
   }
 
@@ -30,28 +30,32 @@ export function useChatSocket() {
     setTimeout(connect, delay);
   }
 
-  async function loadHistory() {
-    if (!sessionId.value || currentAssistant) return;
+  async function loadHistory(sessionId) {
+    if (!sessionId) {
+      messages.value = [];
+      return;
+    }
     try {
-      const response = await fetch(`/api/sessions/${sessionId.value}/messages`);
+      const response = await fetch(`/api/sessions/${sessionId}/messages`, {
+        credentials: "same-origin",
+      });
+      if (!response.ok) return;
       const payload = await response.json();
+      // 切换会话后旧请求可能才返回，丢弃避免串台
+      if (getSessionId() !== sessionId) return;
       const items = payload?.data?.items ?? [];
-      if (!items.length) return;
-
       const mapped = items.map((item) => ({
         id: item.id,
+        seq: item.seq ?? null,
         role: item.role,
         content: item.content,
         sources: item.sources ?? [],
         status: item.status,
       }));
-
-      // 合并而不是覆盖：避免把已经开始的流式气泡冲掉
-      const seen = new Set(messages.value.map((message) => message.id));
-      const missing = mapped.filter((message) => !seen.has(message.id));
-      if (missing.length) {
-        messages.value = [...missing, ...messages.value];
-      }
+      const ordered = mapped.every((item) => typeof item.seq === "number")
+        ? mapped.slice().sort((a, b) => a.seq - b.seq)
+        : mapped;
+      messages.value = ordered;
     } catch {
       /* 历史拉取失败不阻断对话 */
     }
@@ -59,13 +63,13 @@ export function useChatSocket() {
 
   function handle(frame) {
     if (frame.type === "ready") {
-      sessionId.value = frame.session_id;
-      localStorage.setItem(STORAGE_KEY, frame.session_id);
-      if (!messages.value.length) loadHistory();
       return;
     }
     if (frame.type === "meta") {
-      if (currentAssistant) currentAssistant.id = frame.assistant_message_id;
+      if (currentAssistant) {
+        currentAssistant.id = frame.assistant_message_id;
+        currentAssistant.intent = frame.intent ?? "";
+      }
       return;
     }
     if (frame.type === "sources") {
@@ -83,6 +87,7 @@ export function useChatSocket() {
       if (currentAssistant) currentAssistant.status = frame.status;
       status.value = "idle";
       currentAssistant = null;
+      localStorage.removeItem(`${STORAGE_PREFIX}${getSessionId()}`);
       return;
     }
     if (frame.type === "error") {
@@ -108,21 +113,45 @@ export function useChatSocket() {
       }
     };
     socket.onclose = () => {
-      if (!manualClose) scheduleReconnect();
+      if (!manual) scheduleReconnect();
     };
     socket.onerror = () => {
       errorText.value = "连接出错，正在重试";
     };
   }
 
+  function disconnect() {
+    manual = true;
+    if (socket) socket.close();
+    socket = null;
+    currentAssistant = null;
+  }
+
+  function switchSession(sessionId) {
+    disconnect();
+    errorText.value = "";
+    status.value = "idle";
+    messages.value = [];
+    loadHistory(sessionId).then(() => {
+      manual = false;
+      connect();
+    });
+  }
+
   function send(text) {
     const content = text.trim();
-    if (!content || !socket || socket.readyState !== WebSocket.OPEN) {
+    if (!content) return false;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
       errorText.value = "连接尚未就绪，请稍后再试";
       return false;
     }
-    messages.value.push({ id: `u-${Date.now()}`, role: "user", content, sources: [], status: "ok" });
-    // 必须是响应式对象：直接 push 普通对象后改它，Vue 不会触发子组件重渲染
+    messages.value.push({
+      id: `u-${Date.now()}`,
+      role: "user",
+      content,
+      sources: [],
+      status: "ok",
+    });
     currentAssistant = reactive({
       id: `a-${Date.now()}`,
       role: "assistant",
@@ -135,25 +164,14 @@ export function useChatSocket() {
     return true;
   }
 
-  function newSession() {
-    manualClose = true;
-    if (socket) socket.close();
-    localStorage.removeItem(STORAGE_KEY);
-    sessionId.value = "";
-    messages.value = [];
-    currentAssistant = null;
-    errorText.value = "";
-    status.value = "idle";
-    setTimeout(() => {
-      manualClose = false;
-      connect();
-    }, 100);
-  }
-
-  onBeforeUnmount(() => {
-    manualClose = true;
-    if (socket) socket.close();
-  });
-
-  return { messages, status, errorText, sessionId, connect, send, newSession };
+  return {
+    messages,
+    status,
+    errorText,
+    connect,
+    disconnect,
+    switchSession,
+    loadHistory,
+    send,
+  };
 }

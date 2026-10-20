@@ -87,6 +87,59 @@ def test_llm_invoke_returns_text(monkeypatch):
     assert provider.invoke([{"role": "user", "content": "hi"}]) == "改写后的问题"
 
 
+class RecordingChatModel:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.invoke_kwargs = {}
+
+    def invoke(self, messages, **kwargs):
+        self.invoke_kwargs = kwargs
+        return type("C", (), {"content": "ok"})()
+
+    def stream(self, messages):
+        yield type("C", (), {"content": "ok"})()
+
+
+def test_llm_invoke_forwards_max_tokens_to_client(monkeypatch):
+    monkeypatch.setattr("rag_service.infra.llm.ChatOpenAI", RecordingChatModel)
+    provider = OpenAIChatProvider("k", "http://x", "m", 0.2, 60)
+
+    provider.invoke([{"role": "user", "content": "hi"}], max_tokens=16)
+
+    assert provider._client.invoke_kwargs["max_tokens"] == 16
+
+
+def test_build_chat_provider_honours_temperature_retries_and_timeout(monkeypatch, settings_factory):
+    from rag_service.infra.llm import build_chat_provider
+
+    monkeypatch.setattr("rag_service.infra.llm.ChatOpenAI", RecordingChatModel)
+    provider = build_chat_provider(
+        settings_factory(), timeout_seconds=1.5, temperature=0.0, max_retries=0
+    )
+
+    assert provider._client.kwargs["temperature"] == 0.0
+    assert provider._client.kwargs["max_retries"] == 0
+    assert provider._client.kwargs["timeout"] == 1.5
+
+
+def test_build_chat_provider_disables_thinking_when_configured(monkeypatch, settings_factory):
+    from rag_service.infra.llm import build_chat_provider
+
+    monkeypatch.setattr("rag_service.infra.llm.ChatOpenAI", RecordingChatModel)
+    provider = build_chat_provider(settings_factory(), enable_thinking=False)
+
+    assert provider._client.kwargs["extra_body"] == {"enable_thinking": False}
+
+
+def test_build_chat_provider_omits_extra_body_when_thinking_unset(monkeypatch, settings_factory):
+    from rag_service.infra.llm import build_chat_provider
+
+    monkeypatch.setattr("rag_service.infra.llm.ChatOpenAI", RecordingChatModel)
+    provider = build_chat_provider(settings_factory())
+
+    assert "extra_body" not in provider._client.kwargs
+
+
 class FakeMilvusClient:
     def __init__(self):
         self.deleted = []

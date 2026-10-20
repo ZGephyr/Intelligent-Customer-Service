@@ -19,7 +19,7 @@ class RetrievalService:
         reranker: RerankerProvider | None = None,
         candidate_k: int = 20,
         rerank_candidates: int = 10,
-        top_k: int = 5,
+        top_k: int = 3,
         score_threshold: float = 0.35,
         rerank_score_threshold: float = 0.3,
         rrf_k: int = 60,

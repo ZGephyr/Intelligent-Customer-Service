@@ -63,3 +63,27 @@ def test_append_when_redis_raises_does_not_propagate():
             raise RuntimeError("down")
 
     HistoryStore(Broken(), 60, 20).append("s1", [ChatTurn("user", "a")])
+
+
+class KeyDeletingRedis:
+    def __init__(self):
+        self.deleted = []
+
+    def delete(self, key):
+        self.deleted.append(key)
+
+
+def test_clear_deletes_session_history_key():
+    redis = KeyDeletingRedis()
+
+    HistoryStore(redis, ttl_seconds=60, max_messages=20).clear("s1")
+
+    assert redis.deleted == ["chat:history:s1"]
+
+
+def test_clear_swallows_redis_errors():
+    class BrokenRedis:
+        def delete(self, key):
+            raise RuntimeError("redis down")
+
+    HistoryStore(BrokenRedis(), ttl_seconds=60, max_messages=20).clear("s1")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from rag_service.core.config import Settings
@@ -32,3 +34,26 @@ def settings_factory():
 @pytest.fixture
 def settings(settings_factory):
     return settings_factory()
+
+
+@pytest.fixture
+def register_user():
+    """通过接口注册并登录，返回用户信息；测试里用它构造已登录客户端。"""
+
+    def _register(client, username="tester", role="admin", password="password123"):
+        captcha = client.get("/api/auth/captcha").json()["data"]
+        numbers = re.findall(r"\d+", captcha["question"])[:2]
+        response = client.post(
+            "/api/auth/register",
+            json={
+                "username": username,
+                "password": password,
+                "captcha_id": captcha["captcha_id"],
+                "captcha_answer": str(sum(int(value) for value in numbers)),
+                "role": role,
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["data"]
+
+    return _register

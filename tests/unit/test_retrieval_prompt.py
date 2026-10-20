@@ -126,6 +126,7 @@ def test_build_system_prompt_contains_constraints_and_shop_name():
     assert "酷玩店" in prompt
     assert "不得使用外部知识" in prompt
     assert "建议联系人工客服" in prompt
+    assert "即使历史对话里出现过问候" in prompt
 
 
 def test_build_context_block_truncates_over_budget():

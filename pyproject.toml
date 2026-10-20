@@ -1,7 +1,7 @@
 [project]
 name = "rag-service"
-version = "0.1.0"
-description = "RAG 电商智能客服 MVP"
+version = "1.1.2"
+description = "知店智能客服：基于店铺知识库的中文智能客服"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
@@ -19,10 +19,18 @@ dependencies = [
     "openpyxl>=3.1",
     "python-multipart>=0.0.12",
     "flagembedding>=1.4.2",
+    "jieba>=0.42.1",
+    "bcrypt>=5.0.0",
+    "pyjwt>=2.15.1",
 ]
 
 [dependency-groups]
-dev = ["pytest>=8.3", "httpx>=0.28"]
+dev = [
+    "pytest>=8.3",
+    "httpx>=0.28",
+    "ragas>=0.4.3",
+    "langchain-community>=0.3,<0.4",
+]
 ml = ["sentence-transformers>=3.3"]
 
 [build-system]

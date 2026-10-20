@@ -71,6 +71,17 @@ class ChatTurn:
     content: str
 
 
+@dataclass(frozen=True)
+class FaqHit:
+    """高频问答对命中结果：answer 原样返回，matched_text 为命中的问法。"""
+
+    faq_id: str
+    question: str
+    answer: str
+    score: float
+    matched_text: str
+
+
 @dataclass
 class ChatEvent:
     """问答流式事件，协议层原样转成 WebSocket 帧。"""

@@ -1,6 +1,9 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 
+import { useDialog } from "../composables/useDialog";
+
+const { confirm, alert: showAlert } = useDialog();
 const config = ref(null);
 const queue = ref([]);
 const documents = ref([]);
@@ -142,7 +145,13 @@ async function uploadAll() {
 }
 
 async function removeDocument(item) {
-  if (!confirm(`确定删除「${item.filename}」？向量与分块会一并清理。`)) return;
+  const confirmed = await confirm({
+    title: "删除文档",
+    message: `「${item.filename}」的向量与分块会被一并清理。`,
+    confirmText: "删除",
+    danger: true,
+  });
+  if (!confirmed) return;
   const response = await fetch(`/api/admin/documents/${item.id}`, { method: "DELETE" });
   if (!response.ok) {
     const payload = await response.json().catch(() => ({}));
@@ -153,14 +162,24 @@ async function removeDocument(item) {
 }
 
 async function reindex() {
-  if (!confirm("将清空现有向量并用 MySQL 中的分块重建，期间问答可能暂时检索不到内容。继续？")) return;
+  const confirmed = await confirm({
+    title: "重建索引",
+    message: "将清空现有向量并用 MySQL 中的分块重建，期间问答可能暂时检索不到内容。",
+    confirmText: "开始重建",
+    danger: true,
+  });
+  if (!confirmed) return;
   const response = await fetch("/api/admin/reindex", { method: "POST" });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     errorText.value = payload.message || "重建失败";
     return;
   }
-  alert(`重建完成，共 ${payload.data.chunks} 条分块`);
+  await showAlert({
+    title: "重建完成",
+    message: `共 ${payload.data.chunks} 条分块已重新向量化。`,
+    confirmText: "知道了",
+  });
   await loadDocuments();
 }
 
@@ -174,15 +193,8 @@ onBeforeUnmount(stopPolling);
 </script>
 
 <template>
-  <div class="page admin">
-    <header class="header">
-      <h1>知识库管理</h1>
-      <div class="header-right">
-        <a class="nav-link" href="#/">返回对话</a>
-      </div>
-    </header>
-
-    <main class="admin-body">
+  <div class="panel-page">
+    <main>
       <p class="hint">
         支持
         <strong>{{ (config?.supported_extensions ?? []).join(" / ") }}</strong>

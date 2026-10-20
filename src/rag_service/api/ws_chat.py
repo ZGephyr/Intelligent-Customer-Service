@@ -10,10 +10,27 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from rag_service.core.exceptions import AppError
 from rag_service.core.logging import get_logger
+from rag_service.infra.security import decode_token
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+WS_UNAUTHORIZED = 4401
+WS_SESSION_NOT_FOUND = 4404
+
+
+def _resolve_user(websocket: WebSocket):
+    services = getattr(websocket.app.state, "services", None)
+    auth = getattr(services, "auth", None)
+    secret = getattr(websocket.app.state, "auth_secret", "")
+    if auth is None or not secret:
+        return None
+    cookie_name = websocket.app.state.settings.auth_cookie_name
+    payload = decode_token(websocket.cookies.get(cookie_name, ""), secret)
+    if not payload:
+        return None
+    return auth.get_user(payload.get("sub", ""))
 
 
 def _pump(generator, queue: asyncio.Queue, cancel: threading.Event, loop: asyncio.AbstractEventLoop) -> None:
@@ -37,9 +54,27 @@ async def chat_socket(websocket: WebSocket) -> None:
         await websocket.close(code=1008)
         return
 
+    user = _resolve_user(websocket)
+    if user is None:
+        logger.warning("未登录的 WebSocket 连接被拒绝: path=%s", websocket.url.path)
+        await websocket.close(code=WS_UNAUTHORIZED)
+        return
+
+    services = websocket.app.state.services
+    requested_session = websocket.query_params.get("session_id")
+    if requested_session:
+        try:
+            services.sessions.get_owned(requested_session, user.id)
+        except AppError:
+            logger.warning("WebSocket 会话越权: user=%s session=%s", user.id, requested_session)
+            await websocket.close(code=WS_SESSION_NOT_FOUND)
+            return
+        session_id = requested_session
+    else:
+        session_id = services.sessions.create(user.id)
+
     await websocket.accept()
-    service = websocket.app.state.services.chat
-    session_id = websocket.query_params.get("session_id") or service.create_session()
+    service = services.chat
     audit = uuid.uuid4().hex
 
     await websocket.send_json({"type": "ready", "session_id": session_id, "request_id": audit})
@@ -54,7 +89,7 @@ async def chat_socket(websocket: WebSocket) -> None:
         nonlocal cancel, busy
         cancel = threading.Event()
         queue: asyncio.Queue = asyncio.Queue()
-        generator = service.stream_answer(session_id, content)
+        generator = service.stream_answer(session_id, content, request_id=audit, user_id=user.id)
         runner = loop.run_in_executor(None, _pump, generator, queue, cancel, loop)
 
         try:

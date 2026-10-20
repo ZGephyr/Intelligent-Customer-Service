@@ -7,8 +7,12 @@ from fastapi.testclient import TestClient
 
 from rag_service.infra.db import build_engine, build_session_factory, create_all
 from rag_service.main import AppServices, create_app
+from rag_service.services.auth_service import AuthService
 from rag_service.services.chat_service import ChatService
+from rag_service.services.faq_admin_service import FaqAdminService
+from rag_service.services.faq_service import FaqService
 from rag_service.services.health_service import HealthService
+from rag_service.services.session_service import SessionService
 from rag_service.services.ingestion_service import IngestionService
 from rag_service.services.rewrite_service import RewriteOutcome
 
@@ -80,11 +84,18 @@ class FakeLLM:
         return ""
 
 
-def build_client(tmp_path, settings_factory, milvus_down: bool = False, admin_auth_enabled: bool = False):
+def build_client(
+    tmp_path,
+    settings_factory,
+    milvus_down: bool = False,
+    admin_auth_enabled: bool = False,
+    login_role: str | None = "admin",
+):
     settings = settings_factory(
         upload_dir=tmp_path / "uploads",
         log_dir=tmp_path / "logs",
         admin_auth_enabled=admin_auth_enabled,
+        bcrypt_rounds=4,
     )
     engine = build_engine("sqlite://")
     create_all(engine)
@@ -96,9 +107,46 @@ def build_client(tmp_path, settings_factory, milvus_down: bool = False, admin_au
     )
     store = FakeMilvusDown() if milvus_down else FakeStore()
     health = HealthService(engine, FakeRedis(), store, FakeEmbedding())
+    faq = FaqService(factory)
+    faq_admin = FaqAdminService(factory, faq)
+    auth = AuthService(factory, "s" * 32, bcrypt_rounds=4)
+    sessions = SessionService(factory)
 
-    app = create_app(settings, AppServices(chat=chat, ingestion=ingestion, health=health))
-    return TestClient(app)
+    app = create_app(
+        settings,
+        AppServices(
+            chat=chat,
+            ingestion=ingestion,
+            health=health,
+            faq_admin=faq_admin,
+            auth=auth,
+            sessions=sessions,
+        ),
+    )
+    client = TestClient(app)
+    if login_role:
+        register_user = _register_via_client
+        register_user(client, role=login_role)
+    return client
+
+
+def _register_via_client(client, username="tester", role="admin", password="password123"):
+    import re
+
+    captcha = client.get("/api/auth/captcha").json()["data"]
+    numbers = re.findall(r"\d+", captcha["question"])[:2]
+    response = client.post(
+        "/api/auth/register",
+        json={
+            "username": username,
+            "password": password,
+            "captcha_id": captcha["captcha_id"],
+            "captcha_answer": str(sum(int(value) for value in numbers)),
+            "role": role,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
 
 
 @pytest.fixture
@@ -118,13 +166,13 @@ def test_admin_upload_without_token_allowed_when_auth_disabled(app_client):
     assert response.status_code == 202
 
 
-def test_admin_requires_token_when_auth_enabled(tmp_path, settings_factory):
-    client = build_client(tmp_path, settings_factory, admin_auth_enabled=True)
+def test_admin_api_requires_login_when_auth_enabled(tmp_path, settings_factory):
+    client = build_client(tmp_path, settings_factory, admin_auth_enabled=True, login_role=None)
     response = client.post(
         "/api/admin/documents", files={"file": ("a.md", b"x", "text/markdown")}
     )
     assert response.status_code == 401
-    assert response.json()["code"] == "UNAUTHORIZED"
+    assert response.json()["code"] == "AUTH_INVALID_CREDENTIALS"
 
 
 def test_admin_config_returns_supported_extensions(app_client):
@@ -134,6 +182,19 @@ def test_admin_config_returns_supported_extensions(app_client):
     assert {"md", "txt", "csv", "xlsx", "pdf", "docx"} <= set(data["supported_extensions"])
     assert data["max_upload_mb"] > 0
     assert data["admin_auth_enabled"] is False
+
+
+def test_create_app_registers_faq_routes(app_client):
+    response = app_client.get("/api/admin/faqs?page=1&size=10")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["total"] == 0
+
+
+def test_app_services_exposes_faq_admin_field():
+    services = AppServices(chat=None, ingestion=None, health=None)
+
+    assert services.faq_admin is None
 
 
 def test_admin_upload_unsupported_type_returns_400(app_client, admin_headers):
